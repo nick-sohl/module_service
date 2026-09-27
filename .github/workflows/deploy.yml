@@ -1,0 +1,49 @@
+name: build and promote
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        run: echo "value=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: build and push module_service
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: nicksohl/module-service:${{ steps.tag.outputs.value }}
+
+      - name: checkout ops repo
+        uses: actions/checkout@v4
+        with:
+          repository: nick-sohl/user-mgmt-ops
+          token: ${{ secrets.OPS_REPO_TOKEN }}
+          path: ops
+
+      - name: promote tag in values.yaml
+        working-directory: ops
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          sudo curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+          yq -i ".image.tag = \"$TAG\"" helm/module-service/values.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions@github.com"
+          git commit -am "module-service promote: $TAG"
+          git push
